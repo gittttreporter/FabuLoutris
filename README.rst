@@ -1,8 +1,7 @@
 ******
-Lutris
+FabuLoutris
 ******
 
-|LiberaPayBadge|_ |PatreonBadge|_
 
 Lutris helps you install and play video games from all eras and from most
 gaming systems. By leveraging and combining existing emulators, engine
