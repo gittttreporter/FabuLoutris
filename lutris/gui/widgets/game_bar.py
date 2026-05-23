@@ -15,6 +15,45 @@ if TYPE_CHECKING:
     from lutris.gui.application import LutrisApplication
     from lutris.gui.lutriswindow import LutrisWindow
 
+LAUNCH_CONFIG_ICONS = {
+    "editor": "accessories-text-editor",
+    "map": "find-location-symbolic",
+    "mod": "applications-engineering",
+    "mods": "applications-engineering",
+    "modded": "applications-engineering",
+    "benchmark": "utilities-system-monitor",
+    "debug": "dialog-warning",
+    "dx11": "applications-graphics",
+    "dx12": "applications-graphics",
+    "vulkan": "applications-graphics",
+    "opengl": "applications-graphics",
+    "safe": "security-high",
+    "vanilla": "emblem-default",
+    "default": "emblem-default",
+    "server": "network-server",
+    "multiplayer": "system-users",
+    "multi": "system-users",
+    "singleplayer": "avatar-default",
+    "single": "avatar-default",
+    "story": "emblem-documents",
+    "campaign": "emblem-documents",
+    "sandbox": "applications-games",
+    "creative": "applications-games",
+    "custom": "preferences-other",
+    "launcher": "system-run",
+    "tool": "applications-utilities",
+}
+
+LAUNCH_CONFIG_ICON_FALLBACK = "media-playback-start"
+
+
+def get_icon_for_config(name: str) -> str:
+    """Return a GTK icon name based on keywords found in the config name."""
+    name_lower = name.lower()
+    for keyword, icon in LAUNCH_CONFIG_ICONS.items():
+        if keyword in name_lower:
+            return icon
+    return LAUNCH_CONFIG_ICON_FALLBACK
 
 class GameBar(Gtk.Box):
     def __init__(self, db_game: dict, application: "LutrisApplication", window: "LutrisWindow"):
@@ -86,12 +125,17 @@ class GameBar(Gtk.Box):
         self.play_button = self.get_play_button(game_actions)
         hbox.pack_start(self.play_button, False, False, 0)
 
-        hbox.pack_start(self.get_runner_button(), False, False, 0)
+        launch_configs_widget = self.get_launch_configs_widget(game_actions)
+        if launch_configs_widget:
+            hbox.pack_start(launch_configs_widget, False, False, 0)
+        
         hbox.pack_start(self.get_platform_label(), False, False, 0)
+
         if self.game.lastplayed:
             hbox.pack_start(self.get_last_played_label(), False, False, 0)
         if self.game.playtime:
             hbox.pack_start(self.get_playtime_label(), False, False, 0)
+        hbox.pack_end(self.get_runner_button(), False, False, 0)
         hbox.show_all()
 
     @staticmethod
@@ -154,6 +198,65 @@ class GameBar(Gtk.Box):
         title_label.set_ellipsize(Pango.EllipsizeMode.END)
         title_label.set_markup("<span font_desc='16'><b>%s</b></span>" % gtk_safe(self.game.name))
         return title_label
+
+    def get_launch_configs(self):
+        """Safely read launch_configs from the game's YAML config.
+        Returns an empty list if not present or on any error."""
+        try:
+            if not self.game.is_installed:
+                return []
+            if not self.game.config:
+                return []
+            configs = self.game.config.game_config.get("launch_configs", [])
+            if not isinstance(configs, list):
+                return []
+            return [c for c in configs if isinstance(c, dict) and c.get("name")]
+        except Exception:
+            return []
+
+    def get_launch_configs_widget(self, game_actions):
+        """Return the launch configs split button, or None if no configs defined."""
+        configs = self.get_launch_configs()
+        if not configs:
+            return None
+
+        primary_config = configs[0]
+        icon_name = get_icon_for_config(primary_config["name"])
+        icon = Gtk.Image.new_from_icon_name(icon_name, Gtk.IconSize.MENU)
+
+        primary_button = Gtk.Button(image=icon, visible=True)
+        primary_button.set_size_request(32, 32)
+        primary_button.set_tooltip_text(primary_config["name"])
+        primary_button.connect("clicked", self.on_launch_config_clicked, primary_config)
+        primary_button.set_sensitive(
+            self.game.state == self.game.STATE_STOPPED and game_actions.is_game_launchable
+        )
+
+        popover_buttons = []
+        for config in configs:
+            btn = Gtk.ModelButton(visible=True, xalign=0.0)
+            btn.set_label(config["name"])
+            btn.connect("clicked", self.on_launch_config_popover_clicked, config)
+            popover_buttons.append(btn)
+
+        return GameBar.get_popover_box(primary_button, popover_buttons)
+
+    def on_launch_config_clicked(self, button, config):
+        """Launch the game with the given launch config."""
+        self.game.config.game_config["exe"] = config.get("exe", self.game.config.game_config.get("exe"))
+        if "args" in config:
+            self.game.config.game_config["args"] = config["args"]
+        game_actions = get_game_actions([self.game], window=self.window, application=self.application)
+        game_actions.on_game_launch(button)
+
+    def on_launch_config_popover_clicked(self, button, config):
+        """Called from the popover — close it then launch."""
+        try:
+            popover = button.get_parent().get_parent()
+            popover.popdown()
+        except Exception:
+            pass
+        self.on_launch_config_clicked(button, config)
 
     def get_runner_button(self):
         if not self.game.has_runner:
