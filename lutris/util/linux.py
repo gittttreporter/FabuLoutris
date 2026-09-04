@@ -139,7 +139,7 @@ class LinuxSystem:  # pylint: disable=too-many-public-methods
 
         # Expensive fields are lazy; see properties below.
         self._shared_libraries: dict[str, list[SharedLibrary]] | None = None
-        self._glxinfo: GlxInfo | None | object = self._glxinfo_unset
+        self._glxinfo: GlxInfo | object | None = self._glxinfo_unset
 
     @property
     def shared_libraries(self) -> dict[str, list["SharedLibrary"]]:
@@ -200,6 +200,23 @@ class LinuxSystem:  # pylint: disable=too-many-public-methods
         return [drive for drive in json.loads(findmnt_output)["filesystems"] if drive["fstype"] != "squashfs"]
 
     @staticmethod
+    def _iter_filesystems(devices: list[dict[str, Any]]) -> Iterator[dict[str, Any]]:
+        """Yield filesystems and nested filesystems from findmnt output."""
+        devices = list(devices)
+        while devices:
+            device = devices.pop()
+            devices.extend(device.get("children", []))
+            yield device
+
+    @staticmethod
+    def _path_is_on_mount(path: str, mount_point: str) -> bool:
+        try:
+            return os.path.commonpath((path, mount_point)) == mount_point
+        except ValueError:
+            # Paths on different drives can raise ValueError.
+            return False
+
+    @staticmethod
     def get_ram_info() -> dict[str, str]:
         """Parse the output of /proc/meminfo and return RAM information in kB"""
         mem = {}
@@ -217,7 +234,7 @@ class LinuxSystem:  # pylint: disable=too-many-public-methods
         if self.is_flatpak():
             host_distro = distro.LinuxDistribution(root_dir="/run/host")
             return host_distro.name(), host_distro.version(), host_distro.codename()
-        return distro.linux_distribution()
+        return distro.name(), distro.version(), distro.codename()
 
     @staticmethod
     def get_arch() -> str | None:
@@ -305,18 +322,29 @@ class LinuxSystem:  # pylint: disable=too-many-public-methods
 
     def get_fs_type_for_path(self, path: str) -> str | None:
         """Return the filesystem type a given path uses"""
-        mount_point = system.find_mount_point(path)
-        devices = list(self.get_drives())
-        while devices:
-            device = devices.pop()
-            devices.extend(device.get("children", []))
-            if mount_point == device.get("target"):
-                fs_type = device["fstype"]
-                if fs_type == "fuseblk":
-                    out = system.read_process_output(["blkid", "-o", "value", "-s", "TYPE", device["source"]])
-                    fs_type = out.strip() if out else fs_type
-                return cast(str, fs_type)
-        return None
+        path = os.path.realpath(os.path.expanduser(path))
+        matching_device = None
+        matching_mount_point = ""
+
+        for device in self._iter_filesystems(self.get_drives()):
+            target = device.get("target")
+            if not target:
+                continue
+
+            mount_point = os.path.realpath(os.path.expanduser(target))
+            if self._path_is_on_mount(path, mount_point) and len(mount_point) > len(matching_mount_point):
+                matching_device = device
+                matching_mount_point = mount_point
+
+        if not matching_device:
+            return None
+
+        fs_type = matching_device["fstype"]
+        if fs_type == "fuseblk":
+            out = system.read_process_output(["blkid", "-o", "value", "-s", "TYPE", matching_device["source"]])
+            fs_type = out.strip() if out else fs_type
+
+        return cast(str, fs_type)
 
     def get_glxinfo(self) -> GlxInfo | None:
         """Return a GlxInfo instance if the gfxinfo tool is available"""
@@ -505,6 +533,18 @@ class SharedLibrary:
 LINUX_SYSTEM = LinuxSystem()
 
 
+def get_default_runner_wine_version() -> str:
+    """Return the Wine version configured in the Wine runner configuration,
+    falling back to the global default if none is set."""
+    try:
+        from lutris.runners.wine import wine
+
+        return wine().read_version_from_config()
+    except Exception as ex:
+        logger.exception("Unable to determine the default Wine version: %s", ex)
+        return "Unknown"
+
+
 def gather_system_info() -> dict[str, Any]:
     """Get all system information in a single data structure"""
     system_info = {}
@@ -530,14 +570,18 @@ def gather_system_info_dict() -> dict[str, Any]:
     system_info_readable = {}
     # Add system information
     system_dict = {}
-    system_dict["OS"] = " ".join(system_info["dist"])
+    system_dict["OS"] = " ".join(x for x in system_info["dist"] if x)
     system_dict["Arch"] = system_info["arch"]
     system_dict["Kernel"] = system_info["kernel"]
-    system_dict["Lutris Version"] = settings.VERSION
-    system_dict["Python Version"] = sys.version
     system_dict["Desktop"] = system_info["env"].get("XDG_CURRENT_DESKTOP", "Not found")
     system_dict["Display Server"] = system_info["env"].get("XDG_SESSION_TYPE", "Not found")
     system_info_readable["System"] = system_dict
+    # Add Lutris information
+    lutris_dict = {}
+    lutris_dict["Lutris Version"] = settings.VERSION
+    lutris_dict["Python Version"] = sys.version
+    lutris_dict["Default Wine version"] = get_default_runner_wine_version()
+    system_info_readable["Lutris"] = lutris_dict
     # Add CPU information
     cpu_dict = {}
     cpu_dict["Vendor"] = system_info["cpus"][0].get("vendor_id", "Vendor unavailable")

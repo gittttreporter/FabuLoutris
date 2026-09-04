@@ -174,16 +174,28 @@ def create_prefix(
         logger.warning("Proton is not compatible with 32-bit prefixes, forcing win64")
         arch = "win64"
 
-    wineenv = runner.system_config.get("env") or {}
+    # Copy this; everything below mutates 'wineenv', and system_config['env'] is the
+    # runner's live configuration, not a snapshot of it.
+    wineenv = dict(runner.system_config.get("env") or {})
     wineenv.update(
         {
             "WINEARCH": arch,
             "WINEPREFIX": prefix,
             "WINEDLLOVERRIDES": get_overrides_env(overrides),
-            "WINE_MONO_CACHE_DIR": os.path.join(os.path.dirname(os.path.dirname(wine_path)), "mono"),
-            "WINE_GECKO_CACHE_DIR": os.path.join(os.path.dirname(os.path.dirname(wine_path)), "gecko"),
         }
     )
+
+    # Lutris-managed Wine builds bundle the Mono and Gecko installers next to the
+    # 'bin' directory; point Wine at them so it installs from cache. System Wine
+    # has no such bundle (the path would resolve to e.g. /usr/mono), so we leave
+    # these unset and let Wine use its own default discovery (distro packages).
+    wine_root = os.path.dirname(os.path.dirname(wine_path))
+    mono_cache_dir = os.path.join(wine_root, "mono")
+    gecko_cache_dir = os.path.join(wine_root, "gecko")
+    if system.path_exists(mono_cache_dir):
+        wineenv["WINE_MONO_CACHE_DIR"] = mono_cache_dir
+    if system.path_exists(gecko_cache_dir):
+        wineenv["WINE_GECKO_CACHE_DIR"] = gecko_cache_dir
 
     if install_gecko == "False":
         wineenv["WINE_SKIP_GECKO_INSTALLATION"] = "1"
@@ -206,11 +218,9 @@ def create_prefix(
         umu_command = None
         wineboot_path = os.path.join(os.path.dirname(wine_path), "wineboot")
         if not system.path_exists(wineboot_path):
-            logger.error(
-                "No wineboot executable found in %s, your wine installation is most likely broken",
-                wine_path,
+            raise RuntimeError(
+                _("No wineboot executable found in %s, your wine installation is most likely broken") % wine_path
             )
-            return
 
         system.execute([wineboot_path], env=wineenv)
 
@@ -224,13 +234,18 @@ def create_prefix(
             break
         # Check if umu crashed before prefix was created
         if umu_command and not umu_command.is_running:
-            logger.error("Umu exited unexpectedly during prefix creation (return code: %s)", umu_command.return_code)
-            return
+            raise RuntimeError(
+                _(
+                    "Umu exited unexpectedly during prefix creation (return code: %s). "
+                    "Proton could not be set up; check that a Proton build is available "
+                    "and that Lutris can reach the network."
+                )
+                % umu_command.return_code
+            )
         if loop_index == 60:
             logger.warning("Wine prefix creation is taking longer than expected...")
     if not os.path.exists(os.path.join(prefix, "user.reg")):
-        logger.error("No user.reg found after prefix creation. Prefix might not be valid")
-        return
+        raise RuntimeError(_("No user.reg found after prefix creation in %s. The prefix is not valid.") % prefix)
     logger.info("%s Prefix created in %s", arch, prefix)
     prefix_manager = WinePrefixManager(prefix)
     prefix_manager.setup_defaults()
@@ -241,22 +256,36 @@ def winekill(prefix, arch=WINE_DEFAULT_ARCH, wine_path="", env=None, initial_pid
 
     initial_pids = initial_pids or []
     if not env:
-        env = {
-            "WINEARCH": arch,
-            "WINEPREFIX": prefix,
-            "GAMEID": proton.DEFAULT_GAMEID,
-        }
+        # Callers that pass an env have the user's variables merged into it already;
+        # when we build our own (the installer calls us with no env at all) we must
+        # do the same, or settings like UMU_RUNTIME_UPDATE won't apply here.
+        if not runner:
+            runner = import_runner("wine")()
+        env = dict(runner.system_config.get("env") or {})
+        env.update(
+            {
+                "WINEARCH": arch,
+                "WINEPREFIX": prefix,
+                "GAMEID": proton.DEFAULT_GAMEID,
+            }
+        )
     env["PROTON_VERB"] = "runinprefix"  # must not block until the game exits, that would be sily!
-    if proton.is_umu_path(wine_path):
-        command = [wine_path, "wineboot", "-k"]
-    elif proton.is_proton_path(wine_path):
+
+    # An empty wine_path counts as a Proton path, so resolve it before we decide
+    # what to run; otherwise we'd derive an empty PROTONPATH from it below.
+    if not wine_path:
+        if not runner:
+            runner = import_runner("wine")()
+        wine_path = runner.get_executable()
+
+    if proton.is_umu_path(wine_path) or proton.is_proton_path(wine_path):
         command = [proton.get_umu_path(), "wineboot", "-k"]
-        env["PROTONPATH"] = proton.get_proton_path_by_path(wine_path)
+        # Umu downloads its own default Proton when PROTONPATH is unset, so we must
+        # always name the Proton we mean - even just to kill a prefix. Callers that
+        # pass the game's env already have this set; those that don't (the installer's
+        # revert path) would otherwise trigger a UMU-Proton download.
+        proton.update_proton_env(wine_path, env)
     else:
-        if not wine_path:
-            if not runner:
-                runner = import_runner("wine")()
-            wine_path = runner.get_executable()
         wine_root = os.path.dirname(wine_path)
 
         command = [os.path.join(wine_root, "wineserver"), "-k"]
@@ -406,6 +435,12 @@ def wineexec(
         wineenv["PROTON_VERB"] = proton_verb
 
     baseenv = runner.get_env(disable_runtime=disable_runtime)
+    if proton.is_proton_path(wine_path):
+        # The runner's environment describes the runner's *own* Wine version, which may be a
+        # different Proton than the one we were asked to run (an installer script can pin one
+        # while the runner config says 'ge-proton'). Drop it so update_proton_env() can derive
+        # PROTONPATH from wine_path; an explicit PROTONPATH in 'env' still wins, below.
+        baseenv.pop("PROTONPATH", None)
     baseenv.update(wineenv)
     baseenv.update(env)
 
@@ -495,7 +530,10 @@ def winetricks(
         winetricks_path = wine_path
     elif not wine_path or proton.is_umu_path(wine_path):
         winetricks_wine = proton.get_umu_path()
-        winetricks_path = None
+        # Run Umu itself and let it find winetricks via the 'winetricks' verb. Name it
+        # explicitly instead of leaving wineexec() to fall back on the default runner's
+        # executable, which is only Umu by coincidence.
+        winetricks_path = winetricks_wine
         args = "winetricks " + args
         proton_verb = "waitforexitandrun"
         working_dir = None
@@ -505,9 +543,9 @@ def winetricks(
                 "winetricks: attempting to run on a Valve official Proton build; this may not work as expected."
             )
         winetricks_path, working_dir, env = find_winetricks(env, system_winetricks)
-        if not runner:
-            runner = import_runner("wine")()
-        winetricks_wine = runner.get_executable()
+        # Run winetricks against the Wine version we were given (the one the installer
+        # script selected, or the game's own runner), not the default Wine runner's.
+        winetricks_wine = wine_path
         if arch not in ("win32", "win64"):
             arch = detect_arch(prefix, winetricks_wine)
         if str(silent).lower() in ("yes", "on", "true"):

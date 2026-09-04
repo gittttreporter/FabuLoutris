@@ -360,9 +360,12 @@ class Runner:  # pylint: disable=too-many-public-methods
 
         return env
 
-    def finish_env(self, env: dict[str, str], game: Game) -> None:
+    def finish_env(self, env: dict[str, str], game: Game | None = None) -> None:
         """This is called by the Game after setting up the environment to allow the runner
-        to make final adjustments, which may be based on the environment so far."""
+        to make final adjustments, which may be based on the environment so far.
+
+        'game' is None when the runner is launched standalone (get_run_data), in which
+        case there is no game context to derive settings from."""
         return None
 
     def get_runtime_env(self) -> dict[str, str]:
@@ -720,6 +723,19 @@ class Runner:  # pylint: disable=too-many-public-methods
         """Stop the running game. If this leaves any game processes running,
         the caller will SIGKILL them (after a delay)."""
         kill_processes(signal.SIGTERM, game_pids)
+
+    def keep_game_alive(self, game_pids: Iterable[int], game_thread_running: bool) -> bool:
+        """Whether beat() should keep monitoring even though Lutris's own launch
+        process (game_thread) may have exited.
+
+        Most runners keep the game under game_thread, so this returns False and
+        beat() uses its normal logic. Runners that launch the game out-of-process
+        (e.g. Steam, which hands off to a Steam-managed process tree via a
+        non-blocking URI) override this to (a) bridge the brief window between
+        the launcher exiting and the game's process tree appearing, and (b) keep
+        monitoring for the whole game lifetime.
+        """
+        return False
 
     def extract_icon(self, game_slug: str) -> bool | None:
         """The config UI calls this to extract the game icon. Most runners do not

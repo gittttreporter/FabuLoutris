@@ -139,6 +139,7 @@ class LutrisWindow(Gtk.ApplicationWindow, DialogLaunchUIDelegate, DialogInstallU
         self._game_store_generation = 0
         self.current_view = Gtk.Box()
         self.views = {}
+        self._is_busy = False
 
         self.dynamic_categories_game_factories: dict[str, Callable[[], list]] = {
             "recent": self.get_recent_games,
@@ -232,11 +233,26 @@ class LutrisWindow(Gtk.ApplicationWindow, DialogLaunchUIDelegate, DialogInstallU
         schedule_at_idle(self.sync_library, delay_seconds=1.0)
 
     def on_busy_started(self):
-        display = Gdk.Display.get_default()
-        self.get_window().set_cursor(Gdk.Cursor.new_from_name(display, "progress"))
+        self._is_busy = True
+        self.update_busy_cursor()
 
     def on_busy_stopped(self):
-        self.get_window().set_cursor(None)
+        self._is_busy = False
+        self.update_busy_cursor()
+
+    def update_busy_cursor(self):
+        """Applies the 'progress' cursor to this window if Lutris is busy. This does nothing
+        if the window has not been realized; it can be created but never shown when Lutris is
+        started to install or run a game, and it has no GdkWindow to set a cursor on then."""
+        gdk_window = self.get_window()
+        if not gdk_window:
+            return
+
+        if self._is_busy:
+            display = Gdk.Display.get_default()
+            gdk_window.set_cursor(Gdk.Cursor.new_from_name(display, "progress"))
+        else:
+            gdk_window.set_cursor(None)
 
     def _init_actions(self):
         Action = namedtuple("Action", ("callback", "type", "enabled", "default", "accel"))
@@ -352,6 +368,8 @@ class LutrisWindow(Gtk.ApplicationWindow, DialogLaunchUIDelegate, DialogInstallU
         """Finish initializing the view"""
         self._bind_zoom_adjustment()
         self.current_view.grab_focus()
+        # We could have become busy before we had a GdkWindow to set a cursor on
+        self.update_busy_cursor()
 
     def on_sidebar_realize(self, widget, data=None):
         """Grab the initial focus after the sidebar is initialized - so the view is ready."""
@@ -1094,7 +1112,11 @@ class LutrisWindow(Gtk.ApplicationWindow, DialogLaunchUIDelegate, DialogInstallU
         self.filters["installed"] = filter_installed
 
     def update_notification(self):
-        show_notification = self.is_showing_splash() and not read_api_key()
+        show_notification = (
+            self.is_showing_splash()
+            and not read_api_key()
+            and not settings.read_bool_setting("dismissed_login_notification")
+        )
         if show_notification:
             self.lutris_log_in_label.show()
         self.login_notification_revealer.set_reveal_child(show_notification)
@@ -1107,6 +1129,10 @@ class LutrisWindow(Gtk.ApplicationWindow, DialogLaunchUIDelegate, DialogInstallU
         self.login_notification_revealer.set_reveal_child(False)
         login_dialog = ClientLoginDialog(parent=self)
         login_dialog.connect("connected", on_connect_success)
+
+    def on_login_notification_close_button_clicked(self, _button):
+        settings.write_setting("dismissed_login_notification", True)
+        self.login_notification_revealer.set_reveal_child(False)
 
     def on_version_notification_close_button_clicked(self, _button):
         dialog = QuestionDialog(
@@ -1129,8 +1155,7 @@ class LutrisWindow(Gtk.ApplicationWindow, DialogLaunchUIDelegate, DialogInstallU
 
     def on_service_games_loaded(self, service):
         """Request a view update when service games are loaded"""
-        if self.service and service.id == self.service.id:
-            self.update_store()
+        self.update_store()
 
     def on_categories_updated(self):
         self.update_store()

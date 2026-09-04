@@ -39,13 +39,20 @@ except Exception as ex:
 
 
 def detect_arch(prefix_path: str | None = None, wine_path: str | None = None) -> str:
-    """Given a Wine prefix path, return its architecture"""
+    """Given a Wine prefix path, return its architecture.
+
+    Existing prefixes are detected from their registry. For a prefix that does not
+    exist yet we fall back to the host default (64-bit on a 64-bit system): 32-bit
+    prefixes should only be created on a 32-bit host or when the user explicitly
+    asks for one. Older Wine builds shipped a separate 'wine64' binary, but modern
+    builds using the new WoW64 mode ship a single 'wine' binary, so the absence of
+    'wine64' no longer implies a 32-bit-only build."""
     if wine_path:
         if proton.is_proton_path(wine_path) or system.path_exists(wine_path + "64"):
             return "win64"
     if prefix_path and is_prefix_directory(prefix_path):
         return detect_prefix_arch(prefix_path)
-    return "win32"
+    return WINE_DEFAULT_ARCH
 
 
 def is_prefix_directory(prefix_path: str) -> bool:
@@ -73,8 +80,8 @@ def detect_prefix_arch(prefix_path: str) -> str:
                 return "win64"
             if "win32" in line:
                 return "win32"
-    logger.error("Failed to detect Wine prefix architecture in %s; defaulting to 32-bit.", prefix_path)
-    return "win32"
+    logger.error("Failed to detect Wine prefix architecture in %s; defaulting to %s.", prefix_path, WINE_DEFAULT_ARCH)
+    return WINE_DEFAULT_ARCH
 
 
 def set_drive_path(prefix: str, letter: str, path: str) -> None:
@@ -107,9 +114,10 @@ def is_winewayland_available(runner_version: str) -> bool:
             "lib/wine/x86_64-windows/winewayland.drv",
             "lib/wine/i386-windows/winewayland.drv",
         )
-        if not any(os.path.exists(os.path.join(files_dir, winewayland_path)) for winewayland_path in winewayland_paths):
-            return False
+        return any(os.path.exists(os.path.join(files_dir, winewayland_path)) for winewayland_path in winewayland_paths)
 
+    # If there's no file dir to check, we assume Wayland is available- this
+    # happens for GE_PROTON_LATEST.
     return True
 
 
@@ -180,7 +188,7 @@ def get_runner_files_dir_for_version(version: str) -> str | None:
     if version in WINE_PATHS:
         return None
     elif proton.is_proton_version(version):
-        return os.path.join(WINE_DIR, version, "files")
+        return proton.get_proton_wine_files_dir(version)
     else:
         return os.path.join(WINE_DIR, version)
 
