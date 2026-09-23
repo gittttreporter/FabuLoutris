@@ -4,6 +4,7 @@
 
 import os
 import shlex
+import tempfile
 import time
 from gettext import gettext as _
 from typing import TYPE_CHECKING, cast
@@ -226,14 +227,23 @@ def create_prefix(
 
     for loop_index in range(1000):
         time.sleep(0.5)
-        if (
+        # Checked before the files, so a Umu that exits in between can't pass for a crash.
+        umu_exited = bool(umu_command and umu_command.game_process_has_exited)
+        prefix_created = (
             system.path_exists(os.path.join(prefix, "user.reg"))
             and system.path_exists(os.path.join(prefix, "userdef.reg"))
             and system.path_exists(os.path.join(prefix, "system.reg"))
-        ):
-            break
-        # Check if umu crashed before prefix was created
-        if umu_command and not umu_command.is_running:
+        )
+        # Umu writes the registry files long before it is done, so we also wait for it to exit. Until then its
+        # wineserver may still be running inside Umu's container, and a command that connects to it cannot open
+        # anything that container did not mount, such as a setup file on another drive.
+        # See https://github.com/lutris/lutris/issues/6892
+        if not umu_command:
+            if prefix_created:
+                break
+        elif umu_exited:
+            if prefix_created:
+                break
             raise RuntimeError(
                 _(
                     "Umu exited unexpectedly during prefix creation (return code: %s). "
@@ -461,7 +471,19 @@ def wineexec(
     runner.prelaunch()
 
     if blocking:
-        return system.execute(command_parameters, env=baseenv, cwd=working_dir)
+        # We collect stderr in a file rather than a pipe: wineserver keeps running with the
+        # stderr it inherited from us, so a pipe would not reach EOF until wineserver times
+        # out, adding seconds to every command.
+        with tempfile.TemporaryFile() as stderr_file:
+            stdout, stderr = system.execute_with_error(
+                command_parameters, env=baseenv, cwd=working_dir, stderr_file=stderr_file
+            )
+        # Blocking commands aren't monitored, so nothing else would report what they said;
+        # regedit in particular reports its failures here and still exits 0. This is debug
+        # output because umu is very chatty, and only the rare failure is worth reading.
+        for line in stdout.splitlines() + stderr.splitlines():
+            logger.debug("%s: %s", executable or wine_path, line)
+        return stdout
 
     command = MonitoredCommand(
         command_parameters,
