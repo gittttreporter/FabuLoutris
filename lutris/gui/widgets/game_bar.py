@@ -55,6 +55,7 @@ def get_icon_for_config(name: str) -> str:
             return icon
     return LAUNCH_CONFIG_ICON_FALLBACK
 
+
 class GameBar(Gtk.Box):
     def __init__(self, db_game: dict, application: "LutrisApplication", window: "LutrisWindow"):
         """Create the game bar with a database row; db_game may be a DbGameDict
@@ -228,9 +229,7 @@ class GameBar(Gtk.Box):
         primary_button.set_size_request(32, 32)
         primary_button.set_tooltip_text(primary_config["name"])
         primary_button.connect("clicked", self.on_launch_config_clicked, primary_config)
-        primary_button.set_sensitive(
-            self.game.state == self.game.STATE_STOPPED and game_actions.is_game_launchable
-        )
+        primary_button.set_sensitive(self.game.state == self.game.STATE_STOPPED and game_actions.is_game_launchable)
 
         popover_buttons = []
         for config in configs:

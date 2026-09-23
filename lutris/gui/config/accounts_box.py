@@ -244,7 +244,7 @@ class AccountsBox(BaseConfigBox):
         self.sgdb_entry.set_visibility(False)
         self.space_widget(self.sgdb_entry)
 
-        self.sgdb_connected =Gtk.Label(visible=False)
+        self.sgdb_connected = Gtk.Label(visible=False)
         self.space_widget(self.sgdb_connected)
 
         if sgdb_api_key:
@@ -256,7 +256,6 @@ class AccountsBox(BaseConfigBox):
         else:
             sgdb_button_text = _("Save")
             sgdb_button_handler = self.on_sgdb_save_clicked
-
 
         api_box.pack_start(self.sgdb_entry, True, True, 0)
 
@@ -282,4 +281,3 @@ class AccountsBox(BaseConfigBox):
     def on_sgdb_clear_clicked(self, button):
         keyring.delete_password("fabuloutris", "sgdb_api_key")
         self.rebuild_sgdb_options()
-
