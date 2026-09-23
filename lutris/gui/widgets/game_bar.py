@@ -128,7 +128,7 @@ class GameBar(Gtk.Box):
         launch_configs_widget = self.get_launch_configs_widget(game_actions)
         if launch_configs_widget:
             hbox.pack_start(launch_configs_widget, False, False, 0)
-        
+
         hbox.pack_start(self.get_platform_label(), False, False, 0)
 
         if self.game.lastplayed:

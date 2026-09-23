@@ -1,5 +1,6 @@
 from gettext import gettext as _
 
+import keyring
 from gi.repository import Gtk
 
 from lutris import settings
@@ -18,7 +19,6 @@ from lutris.util.library_sync import (
 )
 from lutris.util.steam.config import STEAM_ACCOUNT_SETTING, get_steam_users
 from lutris.util.strings import time_ago
-import keyring
 
 
 class AccountsBox(BaseConfigBox):
@@ -231,13 +231,13 @@ class AccountsBox(BaseConfigBox):
                 AsyncCall(LibrarySyncer().sync_local_library, None)
             else:
                 return
-        
+
         self.on_setting_change(switch, state, "library_sync_enabled")
         self.sync_frame.set_visible(state)
-    
+
     def get_steamgriddb_box(self):
         sgdb_api_key = keyring.get_password("fabuloutris", "sgdb_api_key")
-        
+
         api_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6, visible=True)
 
         self.sgdb_entry = Gtk.Entry(visible=True)
@@ -256,7 +256,7 @@ class AccountsBox(BaseConfigBox):
         else:
             sgdb_button_text = _("Save")
             sgdb_button_handler = self.on_sgdb_save_clicked
-        
+
 
         api_box.pack_start(self.sgdb_entry, True, True, 0)
 
@@ -267,12 +267,12 @@ class AccountsBox(BaseConfigBox):
         api_box.pack_start(sgdb_button, False, False, 0)
 
         return api_box
-    
+
     def on_sgdb_save_clicked(self, button):
         sgdb_api_key = self.sgdb_entry.get_text()
         keyring.set_password("fabuloutris", "sgdb_api_key", sgdb_api_key)
         self.rebuild_sgdb_options()
-    
+
     def rebuild_sgdb_options(self):
         self.sgdb_box.remove(self.steamgriddb_box)
         self.steamgriddb_box.destroy()
@@ -283,4 +283,3 @@ class AccountsBox(BaseConfigBox):
         keyring.delete_password("fabuloutris", "sgdb_api_key")
         self.rebuild_sgdb_options()
 
-        
