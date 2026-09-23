@@ -18,21 +18,26 @@ from lutris.util.library_sync import (
 )
 from lutris.util.steam.config import STEAM_ACCOUNT_SETTING, get_steam_users
 from lutris.util.strings import time_ago
+import keyring
 
 
 class AccountsBox(BaseConfigBox):
     def __init__(self):
         super().__init__()
+
+        # ------------------Lutris account section label-------------------- #
         self.add(self.get_section_label(_("Lutris")))
         frame = Gtk.Frame(visible=True, shadow_type=Gtk.ShadowType.ETCHED_IN)
         frame.get_style_context().add_class("info-frame")
         self.bullshit_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, visible=True)
         self.pack_start(frame, False, False, 0)
 
+        # -----------------Lutris account sections options------------------ #
         self.lutris_options = self.get_lutris_options()
         self.bullshit_box.add(self.lutris_options)
         frame.add(self.bullshit_box)
 
+        # ------------Lutris account sections sync & sync button------------ #
         self.library_syncing_registration = EMPTY_NOTIFICATION_REGISTRATION
         self.library_synced_registration = EMPTY_NOTIFICATION_REGISTRATION
 
@@ -46,6 +51,25 @@ class AccountsBox(BaseConfigBox):
 
         self.pack_start(self.sync_frame, False, False, 0)
 
+        # ----------------SteamGridDB account sections label---------------- #
+        self.add(self.get_section_label(_("SteamGridDB")))
+        self.add(
+            self.get_description_label(
+                _("Enter your SteamGridDB API key to fetch higher quality cover art and hero images.")
+            )
+        )
+        self.sgdb_frame = Gtk.Frame(visible=True, shadow_type=Gtk.ShadowType.ETCHED_IN)
+        self.sgdb_frame.get_style_context().add_class("info-frame")
+        self.pack_start(self.sgdb_frame, False, False, 0)
+
+        self.sgdb_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, visible=True)
+        self.sgdb_frame.add(self.sgdb_box)
+
+        # ---------------SteamGridDB account sections options--------------- #
+        self.steamgriddb_box = self.get_steamgriddb_box()
+        self.sgdb_box.add(self.steamgriddb_box)
+
+        # -------------------Steam account sections label------------------- #
         self.add(self.get_section_label(_("Steam accounts")))
         self.add(
             self.get_description_label(
@@ -56,6 +80,7 @@ class AccountsBox(BaseConfigBox):
         self.frame.get_style_context().add_class("info-frame")
         self.pack_start(self.frame, False, False, 0)
 
+        # ---------------------Steam account box switcher------------------- #
         self.accounts_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, visible=True)
         self.frame.add(self.accounts_box)
 
@@ -206,6 +231,56 @@ class AccountsBox(BaseConfigBox):
                 AsyncCall(LibrarySyncer().sync_local_library, None)
             else:
                 return
-
+        
         self.on_setting_change(switch, state, "library_sync_enabled")
         self.sync_frame.set_visible(state)
+    
+    def get_steamgriddb_box(self):
+        sgdb_api_key = keyring.get_password("fabuloutris", "sgdb_api_key")
+        
+        api_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6, visible=True)
+
+        self.sgdb_entry = Gtk.Entry(visible=True)
+        self.sgdb_entry.set_visibility(False)
+        self.space_widget(self.sgdb_entry)
+
+        self.sgdb_connected =Gtk.Label(visible=False)
+        self.space_widget(self.sgdb_connected)
+
+        if sgdb_api_key:
+            self.sgdb_entry.set_visible(False)
+            sgdb_button_text = _("Logout")
+            sgdb_button_handler = self.on_sgdb_clear_clicked
+
+            self.sgdb_connected
+        else:
+            sgdb_button_text = _("Save")
+            sgdb_button_handler = self.on_sgdb_save_clicked
+        
+
+        api_box.pack_start(self.sgdb_entry, True, True, 0)
+
+        sgdb_button = Gtk.Button(sgdb_button_text, visible=True)
+        sgdb_button.connect("clicked", sgdb_button_handler)
+        self.space_widget(sgdb_button)
+
+        api_box.pack_start(sgdb_button, False, False, 0)
+
+        return api_box
+    
+    def on_sgdb_save_clicked(self, button):
+        sgdb_api_key = self.sgdb_entry.get_text()
+        keyring.set_password("fabuloutris", "sgdb_api_key", sgdb_api_key)
+        self.rebuild_sgdb_options()
+    
+    def rebuild_sgdb_options(self):
+        self.sgdb_box.remove(self.steamgriddb_box)
+        self.steamgriddb_box.destroy()
+        self.steamgriddb_box = self.get_steamgriddb_box()
+        self.sgdb_box.add(self.steamgriddb_box)
+
+    def on_sgdb_clear_clicked(self, button):
+        keyring.delete_password("fabuloutris", "sgdb_api_key")
+        self.rebuild_sgdb_options()
+
+        
